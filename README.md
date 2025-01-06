@@ -18,7 +18,7 @@
 
 ```
 zenn-demo/
-├── 486ccfd8b1f78b/ -> Auth0を活用したGoバックエンドでの認証とHttpOnlyクッキー管理
+├── 486ccfd8b1f78b/ -> GoとAuth0で実現するセキュアな認証: HttpOnlyクッキーの活用法
 └── ...
 ```
 
