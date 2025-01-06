@@ -1,14 +1,17 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Auth0 Protected Test</title>
 </head>
+
 <body>
     <h1>Auth0 Protected Endpoint Test</h1>
     <button id="login-button">Log in</button>
     <button id="protected-button">Access Protected Resource</button>
+    <button id="logout-button">Log out</button>
     <p id="result"></p>
 
     <script>
@@ -30,6 +33,29 @@
                 document.getElementById('result').innerText = 'Error accessing protected resource';
             }
         });
+
+        document.getElementById('logout-button').addEventListener('click', async () => {
+            try {
+                const response = await fetch('http://localhost:3000/logout', {
+                    method: 'POST', // POST リクエストを送信
+                    credentials: 'include', // クッキーを送信
+                });
+
+                if (response.ok) {
+                    // ログアウト成功後にリダイレクト
+                    document.getElementById('result').innerText = 'Logout successful!';
+                    setTimeout(() => {
+                        window.location.href = 'http://localhost:8000/index.html';
+                    }, 1000); // 1秒後にリダイレクト
+                } else {
+                    document.getElementById('result').innerText = 'Logout failed!';
+                }
+            } catch (err) {
+                console.error('Error during logout:', err);
+                document.getElementById('result').innerText = 'Error during logout.';
+            }
+        });
     </script>
 </body>
+
 </html>

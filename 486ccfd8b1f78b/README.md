@@ -1,6 +1,17 @@
-# Auth0 と Goバックエンド を用いた httponly なクッキー認証
+# GoとAuth0で実現するセキュアな認証: HttpOnlyクッキーの活用法
 
-このプロジェクトでは、Auth0 を利用して Go バックエンドで認証を実装し、HttpOnly クッキーを使用してセキュリティを強化します。また、ログアウト機能も実装し、セッションを安全に終了する方法を解説します。
+現代のウェブアプリケーションでは、セキュリティを確保しながらスムーズなユーザー体験を提供することが求められています。特に、ユーザー認証はアプリケーションの中核を担う部分であり、セキュリティリスクを最小限に抑えることが重要です。
+
+本記事では、HttpOnlyクッキーを利用した認証の実装方法を中心に解説します。この方法は、クロスサイトスクリプティング（XSS）攻撃を防ぎ、トークンを安全に管理する優れたアプローチです。さらに、Auth0を活用して認証フローを簡略化し、Go言語を用いたバックエンド実装を通じて、セキュリティと使いやすさを両立したシステムを構築する方法を紹介します。
+
+この記事を読むことで、以下のことが学べます：
+
+- フロントエンドとバックエンドを分離する理由とその利点
+- HttpOnlyクッキーを使用することで実現できるセキュリティ向上のポイント
+- Auth0を利用したGoバックエンドでの認証フローの実装方法
+- ログイン・ログアウトフローの構築と安全なセッション管理
+
+認証に関する基礎知識から実装方法まで、ステップバイステップで説明していきます。特に「セキュアでシンプルな認証」を目指す方にとって、すぐに使える具体的なサンプルコードと設定例を提供します。それでは、一緒に進めていきましょう！
 
 ---
 
@@ -62,6 +73,23 @@
 - **セッションハイジャックの防止**  
   クッキーの不正取得を防ぐことで、セッションハイジャックのリスクを低減します。
 
+ここまでで、フロントエンドとバックエンドを分離する理由や、さまざまな認証方法の特徴とHttpOnlyクッキーを活用する利点について解説しました。それでは次に、これらの理論を踏まえた実際の実装方法について解説していきます。
+
+このプロジェクトでは、以下のポイントを押さえながら、Go言語を使用してAuth0を活用した認証システムを構築します。
+
+- **Auth0を活用したシンプルでセキュアな認証の実現** 
+Auth0は、認証やユーザー管理を容易にするプラットフォームであり、アクセストークンやIDトークンの発行を簡単に行えます。これを活用し、安全で拡張性の高い認証システムを構築します。
+
+- **HttpOnlyクッキーによるトークン管理** 
+認証の際に発行されたアクセストークンをHttpOnlyクッキーに保存し、セキュリティを強化します。クッキーはブラウザが自動的に送信するため、APIリクエストの実装もシンプルになります。
+
+- **セッションの安全な終了（ログアウト機能）** 
+セッションを終了する際にクッキーを削除することで、ログアウト処理を安全かつ確実に行います。
+
+これから、具体的なコードを用いて、Goを使ったバックエンドの実装方法をステップバイステップで説明していきます。また、Auth0の設定方法についても併せて解説しますので、一緒に進めていきましょう。
+
+ではまず、プロジェクトのセットアップと、必要なパッケージのインストールから始めます！
+
 ---
 
 ## 必要な環境
@@ -73,18 +101,6 @@
 ---
 
 ## セットアップ手順
-
-### 1. 必要なパッケージをインストール
-
-以下のコマンドで必要なパッケージをインストールします。
-
-```
-go get github.com/gorilla/mux
-go get github.com/joho/godotenv
-go get github.com/dgrijalva/jwt-go
-```
-
----
 
 ### 2. Auth0 の設定
 
@@ -150,22 +166,37 @@ import (
 	"os"
 	"time"
 
-	"github.com/dgrijalva/jwt-go"
 	"github.com/gorilla/mux"
 	"github.com/joho/godotenv"
 	"golang.org/x/oauth2"
 )
 
+// グローバル変数
 var oauthConfig *oauth2.Config
 
+// UserInfoResponse は /userinfo エンドポイントのレスポンスを格納する構造体
+type UserInfoResponse struct {
+	Sub   string `json:"sub"`   // ユーザーID
+	Email string `json:"email"` // メールアドレス
+	Name  string `json:"name"`  // ユーザー名
+}
+
 func init() {
-	err := godotenv.Load()
-	if err != nil {
+	loadEnvVariables()      // 環境変数をロード
+	initializeOAuthConfig() // OAuth2設定を初期化
+}
+
+func loadEnvVariables() {
+	// .envファイルを読み込む
+	if err := godotenv.Load(); err != nil {
 		log.Fatal("Error loading .env file")
 	}
+}
 
+func initializeOAuthConfig() {
+	// Auth0のドメインを取得
 	auth0Domain := os.Getenv("AUTH0_DOMAIN")
-
+	// OAuth2設定を構築
 	oauthConfig = &oauth2.Config{
 		ClientID:     os.Getenv("AUTH0_CLIENT_ID"),
 		ClientSecret: os.Getenv("AUTH0_CLIENT_SECRET"),
@@ -178,19 +209,36 @@ func init() {
 	}
 }
 
+func main() {
+	r := mux.NewRouter()
+
+	// エンドポイント定義
+	r.HandleFunc("/login", loginHandler)                                                // ログイン処理
+	r.HandleFunc("/callback", callbackHandler)                                          // コールバック処理
+	r.Handle("/protected", validateTokenMiddleware(http.HandlerFunc(protectedHandler))) // 保護されたリソース
+	r.HandleFunc("/logout", logoutHandler)                                              // ログアウト処理
+
+	http.Handle("/", corsMiddleware(r)) // CORS設定をミドルウェアで追加
+
+	log.Println("Server started at http://localhost:3000")
+	log.Fatal(http.ListenAndServe(":3000", nil))
+}
+
 func loginHandler(w http.ResponseWriter, r *http.Request) {
+	// 認証URLを生成しリダイレクト
 	state := "exampleState"
 	url := oauthConfig.AuthCodeURL(state)
 	http.Redirect(w, r, url, http.StatusTemporaryRedirect)
 }
 
 func callbackHandler(w http.ResponseWriter, r *http.Request) {
-	state := r.URL.Query().Get("state")
-	if state != "exampleState" {
+	// CSRF保護のためのstate確認
+	if state := r.URL.Query().Get("state"); state != "exampleState" {
 		http.Error(w, "Invalid state parameter", http.StatusBadRequest)
 		return
 	}
 
+	// 認証コードを取得しトークン交換
 	code := r.URL.Query().Get("code")
 	token, err := oauthConfig.Exchange(r.Context(), code)
 	if err != nil {
@@ -198,54 +246,27 @@ func callbackHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// クッキーにアクセストークンを保存
 	setAuthCookie(w, token.AccessToken)
 	http.Redirect(w, r, "http://localhost:8000", http.StatusSeeOther)
 }
 
 func setAuthCookie(w http.ResponseWriter, token string) {
+	// HttpOnlyクッキーを設定
 	cookie := &http.Cookie{
 		Name:     "auth_token",
 		Value:    token,
 		Path:     "/",
 		HttpOnly: true,
-		Secure:   false,
-		MaxAge:   3600,
+		Secure:   false, // ローカル環境ではfalse、本番環境ではtrue
+		MaxAge:   3600,  // 有効期限を1時間に設定
 		SameSite: http.SameSiteStrictMode,
 	}
 	http.SetCookie(w, cookie)
 }
 
-func validateTokenMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		cookie, err := r.Cookie("auth_token")
-		if err != nil {
-			http.Error(w, "Unauthorized: No token found", http.StatusUnauthorized)
-			return
-		}
-
-		tokenString := cookie.Value
-		token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
-			if _, ok := token.Method.(*jwt.SigningMethodRSA); !ok {
-				return nil, fmt.Errorf("Unexpected signing method: %v", token.Header["alg"])
-			}
-
-			return nil, fmt.Errorf("Public key verification not implemented")
-		})
-
-		if err != nil || !token.Valid {
-			http.Error(w, "Unauthorized: Invalid token", http.StatusUnauthorized)
-			return
-		}
-
-		next.ServeHTTP(w, r)
-	})
-}
-
-func protectedHandler(w http.ResponseWriter, r *http.Request) {
-	w.Write([]byte("You have accessed a protected resource!"))
-}
-
 func logoutHandler(w http.ResponseWriter, r *http.Request) {
+	// クッキーを無効化してログアウト処理
 	http.SetCookie(w, &http.Cookie{
 		Name:     "auth_token",
 		Value:    "",
@@ -255,19 +276,89 @@ func logoutHandler(w http.ResponseWriter, r *http.Request) {
 		MaxAge:   -1,
 		Expires:  time.Unix(0, 0),
 	})
-	http.Redirect(w, r, "http://localhost:8000/index.html", http.StatusSeeOther)
+
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("Logout successful"))
 }
 
-func main() {
-	r := mux.NewRouter()
-	r.HandleFunc("/login", loginHandler)
-	r.HandleFunc("/callback", callbackHandler)
-	r.Handle("/protected", validateTokenMiddleware(http.HandlerFunc(protectedHandler)))
-	r.HandleFunc("/logout", logoutHandler)
+func validateTokenMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// クッキーからトークンを取得
+		cookie, err := r.Cookie("auth_token")
+		if err != nil {
+			http.Error(w, "Unauthorized: No token found", http.StatusUnauthorized)
+			return
+		}
 
-	log.Println("Server started at http://localhost:3000")
-	log.Fatal(http.ListenAndServe(":3000", nil))
+		// トークンを検証
+		userInfo, err := validateOpaqueToken(cookie.Value)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Unauthorized: %v", err), http.StatusUnauthorized)
+			return
+		}
+
+		// 認証成功時のログ
+		log.Printf("Authenticated user: %s (%s)", userInfo.Name, userInfo.Email)
+		next.ServeHTTP(w, r)
+	})
 }
+
+func protectedHandler(w http.ResponseWriter, r *http.Request) {
+	// 保護されたリソースにアクセス成功時のレスポンス
+	w.Write([]byte("You have accessed a protected resource!"))
+}
+
+func validateOpaqueToken(token string) (*UserInfoResponse, error) {
+	// Auth0の/userinfoエンドポイントを使用してトークンを検証
+	domain := os.Getenv("AUTH0_DOMAIN")
+	userinfoURL := fmt.Sprintf("https://%s/userinfo", domain)
+
+	req, err := http.NewRequest("GET", userinfoURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to call /userinfo endpoint: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("invalid token: received status %d", resp.StatusCode)
+	}
+
+	// ユーザー情報をデコード
+	var userInfo UserInfoResponse
+	if err := json.NewDecoder(resp.Body).Decode(&userInfo); err != nil {
+		return nil, fmt.Errorf("failed to decode /userinfo response: %v", err)
+	}
+
+	return &userInfo, nil
+}
+
+func corsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// CORSヘッダーを設定
+		setCorsHeaders(w)
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func setCorsHeaders(w http.ResponseWriter) {
+	// 必要なCORSヘッダーを設定
+	w.Header().Set("Access-Control-Allow-Origin", "http://localhost:8000")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+	w.Header().Set("Access-Control-Allow-Credentials", "true")
+}
+
 ```
 
 ---
@@ -279,11 +370,13 @@ func main() {
 ```html
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Auth0 Protected Test</title>
 </head>
+
 <body>
     <h1>Auth0 Protected Endpoint Test</h1>
     <button id="login-button">Log in</button>
@@ -312,11 +405,29 @@ func main() {
         });
 
         document.getElementById('logout-button').addEventListener('click', async () => {
-            await fetch('http://localhost:3000/logout', { credentials: 'include' });
-            window.location.href = 'http://localhost:8000/index.html';
+            try {
+                const response = await fetch('http://localhost:3000/logout', {
+                    method: 'POST', // POST リクエストを送信
+                    credentials: 'include', // クッキーを送信
+                });
+
+                if (response.ok) {
+                    // ログアウト成功後にリダイレクト
+                    document.getElementById('result').innerText = 'Logout successful!';
+                    setTimeout(() => {
+                        window.location.href = 'http://localhost:8000/index.html';
+                    }, 1000); // 1秒後にリダイレクト
+                } else {
+                    document.getElementById('result').innerText = 'Logout failed!';
+                }
+            } catch (err) {
+                console.error('Error during logout:', err);
+                document.getElementById('result').innerText = 'Error during logout.';
+            }
         });
     </script>
 </body>
+
 </html>
 ```
 
@@ -324,21 +435,127 @@ func main() {
 
 ### 6. 動作確認
 
-1. **バックエンドを起動**:
-   ```
-   go run main.go
-   ```
+まず、以下の準備を完了してください：
 
-2. **フロントエンドを起動**:
-   ```
-   python -m http.server 8000
-   ```
+1. **バックエンドの起動**:
+```
+go run main.go
+```
 
-3. ブラウザで `http://localhost:8000/index.html` を開き、以下を確認:
-   - **Log in** ボタンでログインフローを確認。
-   - **Access Protected Resource** ボタンで認証済みリソースへのアクセスを確認。
-   - **Log out** ボタンでログアウトし、認証済みリソースにアクセスできないことを確認。
+2. **フロントエンドの起動**:
+```
+python -m http.server 8000
+```
+
+3. ブラウザで `http://localhost:8000/index.html` を開きます。
 
 ---
 
-これでログアウト機能を含めたフルセットのシステムが完成します！必要に応じて調整してください。質問があればお知らせください！ 🎉
+#### **6.1. 初期状態**
+
+ブラウザでフロントエンドにアクセスすると、以下のような画面が表示されます。
+
+- **初期状態**: ログインボタンのみが機能します。保護されたリソースやログアウトボタンを押してもアクセスできません。
+
+![](https://storage.googleapis.com/zenn-user-upload/4b067d84989a-20250106.png)
+
+---
+
+#### **6.2. ログイン画面**
+
+ログインボタンをクリックすると、Auth0 のログイン画面にリダイレクトされます。
+
+- **ログイン画面**: ユーザー名とパスワードを入力して認証を進めます。
+
+![](https://storage.googleapis.com/zenn-user-upload/ac88c0047bfe-20250106.png)
+
+---
+
+#### **6.3. ログイン成功後の画面**
+
+ログインが成功すると、ブラウザに戻り、以下のように保護されたリソースにアクセス可能になります。
+
+- **ログイン成功後**:  
+  - 保護されたリソース（"You have accessed a protected resource!"）が正常に表示されます。
+  - `Access Protected Resource` ボタンが機能することを確認できます。
+
+![](https://storage.googleapis.com/zenn-user-upload/c9f5ad5e1810-20250106.png)
+
+---
+
+#### **6.4. ログアウト処理**
+
+`Log out` ボタンをクリックすると、以下のようにログアウトが成功し、再び保護されたリソースにアクセスできなくなります。
+
+- **ログアウト成功後**:  
+  - ログアウトメッセージ（"Logout successful"）が表示されます。
+  - 再度リソースにアクセスしようとすると、エラーが表示されます。
+
+![](https://storage.googleapis.com/zenn-user-upload/73d59f940c5d-20250106.png)
+
+---
+
+#### **6.5. 未ログイン状態で保護されたリソースにアクセスした場合**
+
+ログアウト後、`Access Protected Resource` ボタンをクリックすると、以下のエラーが表示されます。
+
+- **エラー画面**:  
+  - "Access Denied: Unauthorized" というメッセージが画面に表示されます。
+
+![](https://storage.googleapis.com/zenn-user-upload/9b394ab94dc6-20250106.png)
+
+---
+
+### 7. HttpOnly クッキーをブラウザで確認する方法
+
+HttpOnly クッキーは通常の JavaScript からアクセスできませんが、ブラウザの開発者ツールを使用して確認できます。（以下、ログインした状態で行ってください）
+
+#### **手順: Chrome の場合**
+
+1. **開発者ツールを開く**:
+   - キーボードショートカットで開く: `Ctrl + Shift + I` (Windows) または `Cmd + Option + I` (Mac)。
+   - または、ブラウザの右上メニューから「その他のツール > デベロッパーツール」を選択。
+
+2. **「Application」タブを選択**:
+   - 開発者ツールの上部メニューから「Application」をクリックします。
+
+3. **「Cookies」セクションを選択**:
+   - 左側のサイドメニューから「Storage > Cookies」をクリックし、`http://localhost:8000` を選択します。
+
+4. **クッキー情報を確認**:
+   - `auth_token` という名前のクッキーが保存されていることを確認できます。
+   - `HttpOnly` 属性が有効であることを確認してください（通常、この属性は列として表示されます）。
+   
+![](https://storage.googleapis.com/zenn-user-upload/bd7e9c32eb68-20250106.png)
+
+---
+
+#### **HttpOnly クッキーが JS からアクセスできないことを確認する**
+
+以下のスニペットをブラウザのコンソールで実行してみてください：
+
+```
+console.log(document.cookie);
+```
+
+- 結果: `auth_token` が含まれていないことを確認できます。
+  - これは `HttpOnly` 属性により、JavaScript からクッキーにアクセスできないためです。
+
+![](https://storage.googleapis.com/zenn-user-upload/1e6905c133a7-20250106.png)
+
+---
+
+これらの手順を通じて、Auth0 と Go バックエンドを用いた HttpOnly クッキー認証の動作を確認できます。
+
+---
+
+
+ここまで、Auth0を活用したGoバックエンドでの認証フローと、HttpOnlyクッキーを利用したセキュアなトークン管理について詳しく解説しました。
+
+ウェブアプリケーションにおける認証は、ユーザー体験の向上だけでなく、セキュリティを確保する上でも重要な要素です。本記事で紹介したHttpOnlyクッキーを利用した方法は、JavaScriptによる不正アクセスを防ぎつつ、シンプルで堅牢な認証システムを構築するための一例です。
+
+また、Auth0を活用することで、認証機能を自前で実装する手間を大幅に削減しつつ、拡張性の高い認証基盤を構築できます。加えて、ログインやログアウトフローのセキュアな実装や、トークン管理の仕組みを理解することで、より安全で使いやすいシステム設計を目指せるでしょう。
+
+最後に、本記事の内容を通じて、読者の皆さまがセキュアで実用的な認証システムを構築するヒントを得られたのであれば幸いです。ぜひ今回のサンプルコードを参考に、実際のプロジェクトで試してみてください！
+
+もし本記事に関してご質問やフィードバックがあれば、ぜひコメント欄でお知らせください。また、この記事が役立った場合はシェアしていただけると励みになります。それでは、セキュアなアプリケーション開発を楽しんでください！ 😊
