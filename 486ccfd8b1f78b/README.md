@@ -1,13 +1,80 @@
+# Auth0 と Goバックエンド を用いた httponly なクッキー認証
 
-# Auth0を活用したGoバックエンドでの認証とHttpOnlyクッキー管理
-
-この記事では、Auth0を利用してGoバックエンドでの認証を実装し、HttpOnlyクッキーを使用してセキュリティを強化する方法を解説します。また、認証前後でバックエンドの保護されたエンドポイントにアクセスできるようになる流れを、フロントエンドと併せて説明します。
+このプロジェクトでは、Auth0 を利用して Go バックエンドで認証を実装し、HttpOnly クッキーを使用してセキュリティを強化します。また、ログアウト機能も実装し、セッションを安全に終了する方法を解説します。
 
 ---
 
-## 実装手順
+## フロントエンドとバックエンドを分離する理由
 
-### 必要なパッケージの準備
+現代のウェブアプリケーションでは、フロントエンドとバックエンドを分離するアーキテクチャが主流です。その理由として、以下が挙げられます。
+
+- **開発体制の分離**  
+  フロントエンドとバックエンドを分けることで、それぞれのチームが独立して開発を進められます。これにより、UIの変更や機能追加が迅速に行え、開発効率が向上します。
+
+- **リッチなUIの実現**  
+  ReactやVue.jsといったフロントエンドフレームワークを使用することで、ユーザー体験を向上させるリッチなインターフェースを構築しやすくなります。
+
+- **スケーラビリティの向上**  
+  バックエンドをAPIとして提供することで、複数のプラットフォーム（ウェブ、モバイルアプリなど）からの利用が可能となり、システムの拡張性が高まります。
+
+- **責務の明確化**  
+  各層の役割が明確になるため、コードの保守性が向上し、バグの発見や修正が容易になります。
+
+---
+
+## 認証方法の比較とHttpOnlyクッキーの利点
+
+### 認証方法の比較
+
+ウェブアプリケーションにおけるユーザー認証には、主に以下の方法があります。
+
+#### 1. クッキー認証
+
+サーバーがユーザーのセッション情報をクッキーとしてクライアントに保存し、以降のリクエストでそのクッキーを使用してユーザーを識別する方法です。
+
+- **利点**  
+  - サーバー側でセッション管理が可能で、ユーザー情報の保持が容易。  
+  - ブラウザが自動的にクッキーを送信するため、追加の実装が少ない。
+
+- **欠点**  
+  - クッキーが盗まれると、セッションハイジャックのリスクがある。  
+  - クロスサイトスクリプティング（XSS）攻撃により、クッキー情報が漏洩する可能性がある。
+
+#### 2. トークン認証（例: JWT）
+
+ユーザー認証後にサーバーがJSON Web Token（JWT）を発行し、クライアントがそのトークンをリクエストヘッダーに含めて送信する方法です。
+
+- **利点**  
+  - ステートレスであり、サーバーのスケーラビリティが向上。  
+  - 複数のドメイン間での認証が容易。
+
+- **欠点**  
+  - トークンの管理をクライアント側で行う必要があり、実装が複雑になる場合がある。  
+  - トークンの漏洩リスクが存在し、適切な保護が必要。
+
+### HttpOnlyクッキーの利点
+
+クッキー認証において、`HttpOnly` 属性を設定することで、以下のセキュリティ強化が可能です。
+
+- **JavaScriptからのアクセス制限**  
+  `HttpOnly` 属性を持つクッキーは、クライアントサイドのJavaScriptからアクセスできません。これにより、XSS攻撃によるクッキーの盗難を防ぐことができます。
+
+- **セッションハイジャックの防止**  
+  クッキーの不正取得を防ぐことで、セッションハイジャックのリスクを低減します。
+
+---
+
+## 必要な環境
+
+- Go 1.18 以上
+- Auth0 アカウント
+- フロントエンド環境（HTML, JavaScript）
+
+---
+
+## セットアップ手順
+
+### 1. 必要なパッケージをインストール
 
 以下のコマンドで必要なパッケージをインストールします。
 
@@ -19,14 +86,42 @@ go get github.com/dgrijalva/jwt-go
 
 ---
 
-### Auth0の設定
+### 2. Auth0 の設定
 
-Auth0のダッシュボードで以下の設定を行います：
+Auth0 ダッシュボードで以下を設定します：
 
-- **APIの作成**: API識別子（audience）を設定
-- **アプリケーションの作成**: クライアントIDとクライアントシークレットを取得
+1. **アプリケーション作成**
+   - Auth0 ダッシュボードでアプリケーションを作成し、以下の情報を取得：
+     - Client ID
+     - Client Secret
+     - Domain
 
-次に、`.env`ファイルを作成し、以下のように環境変数を設定します。
+2. **API 作成**
+   - 「APIs」で新しい API を作成します。
+   - 「Identifier」を設定（例: `https://my-api/`）。
+
+3. **設定**
+   - **Allowed Callback URLs**:
+     ```
+     http://localhost:3000/callback
+     ```
+   - **Allowed Logout URLs**:
+     ```
+     http://localhost:8000/index.html
+     ```
+   - **Allowed Web Origins**:
+     ```
+     http://localhost:8000
+     ```
+
+4. **Grant Types の確認**
+   - 「Settings」タブの下部にある「Grant Types」で **Authorization Code** が有効になっていることを確認。
+
+---
+
+### 3. `.env` ファイルの作成
+
+`.env` ファイルを作成し、以下のように環境変数を設定します。
 
 ```
 AUTH0_DOMAIN=your-auth0-domain
@@ -38,11 +133,13 @@ AUTH0_AUDIENCE=your-api-identifier
 
 ---
 
-### Goサーバの実装
+### 4. サーバ実装
 
-以下は、Auth0を利用したGoサーバのコードで、認証後に`protected`エンドポイントがアクセス可能になる流れを含んでいます。
+以下のコードを使用して Go サーバを実装します。
 
-```
+#### `main.go`
+
+```go
 package main
 
 import (
@@ -51,6 +148,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/dgrijalva/jwt-go"
 	"github.com/gorilla/mux"
@@ -101,9 +199,7 @@ func callbackHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	setAuthCookie(w, token.AccessToken)
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(token)
+	http.Redirect(w, r, "http://localhost:8000", http.StatusSeeOther)
 }
 
 func setAuthCookie(w http.ResponseWriter, token string) {
@@ -112,7 +208,7 @@ func setAuthCookie(w http.ResponseWriter, token string) {
 		Value:    token,
 		Path:     "/",
 		HttpOnly: true,
-		Secure:   false, // ローカル開発ではfalse。プロダクションではtrueに設定
+		Secure:   false,
 		MaxAge:   3600,
 		SameSite: http.SameSiteStrictMode,
 	}
@@ -133,7 +229,7 @@ func validateTokenMiddleware(next http.Handler) http.Handler {
 				return nil, fmt.Errorf("Unexpected signing method: %v", token.Header["alg"])
 			}
 
-			return nil, fmt.Errorf("Public key verification not implemented") // 実際には公開鍵取得の処理を実装
+			return nil, fmt.Errorf("Public key verification not implemented")
 		})
 
 		if err != nil || !token.Valid {
@@ -149,12 +245,25 @@ func protectedHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte("You have accessed a protected resource!"))
 }
 
+func logoutHandler(w http.ResponseWriter, r *http.Request) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     "auth_token",
+		Value:    "",
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   false,
+		MaxAge:   -1,
+		Expires:  time.Unix(0, 0),
+	})
+	http.Redirect(w, r, "http://localhost:8000/index.html", http.StatusSeeOther)
+}
+
 func main() {
 	r := mux.NewRouter()
 	r.HandleFunc("/login", loginHandler)
 	r.HandleFunc("/callback", callbackHandler)
 	r.Handle("/protected", validateTokenMiddleware(http.HandlerFunc(protectedHandler)))
-	http.Handle("/", r)
+	r.HandleFunc("/logout", logoutHandler)
 
 	log.Println("Server started at http://localhost:3000")
 	log.Fatal(http.ListenAndServe(":3000", nil))
@@ -163,11 +272,11 @@ func main() {
 
 ---
 
-### フロントエンドの実装
+### 5. フロントエンドの実装
 
-以下は、簡単なフロントエンドです。認証前後のアクセスを確認するために利用します。このコードを`index.html`として保存します。
+以下の `index.html` を作成して、フロントエンドを実装します。
 
-```
+```html
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -179,6 +288,7 @@ func main() {
     <h1>Auth0 Protected Endpoint Test</h1>
     <button id="login-button">Log in</button>
     <button id="protected-button">Access Protected Resource</button>
+    <button id="logout-button">Log out</button>
     <p id="result"></p>
 
     <script>
@@ -200,6 +310,11 @@ func main() {
                 document.getElementById('result').innerText = 'Error accessing protected resource';
             }
         });
+
+        document.getElementById('logout-button').addEventListener('click', async () => {
+            await fetch('http://localhost:3000/logout', { credentials: 'include' });
+            window.location.href = 'http://localhost:8000/index.html';
+        });
     </script>
 </body>
 </html>
@@ -207,53 +322,23 @@ func main() {
 
 ---
 
-### フロントエンド用ローカルサーバの立ち上げ
+### 6. 動作確認
 
-1. **Pythonを使用してローカルサーバを起動する場合**  
-   以下のコマンドを実行して、ローカルサーバを起動します：
-
-   ```
-   python -m http.server 8000
-   ```
-
-   これにより、現在のディレクトリが`http://localhost:8000`で配信されます。
-
-2. **Node.jsを使用してサーバを起動する場合**  
-   `http-server`モジュールを使う場合：
-
-   ```
-   npm install -g http-server
-   http-server -p 8000
-   ```
-
-   `http://localhost:8000` にアクセスします。
-
----
-
-### ローカルでの動作確認
-
-1. **Goサーバを起動する**  
-   以下のコマンドを使用してGoサーバを起動します：
-
+1. **バックエンドを起動**:
    ```
    go run main.go
    ```
 
-2. **フロントエンドサーバを起動する**  
-   PythonやNode.jsの方法で`http://localhost:8000`を起動します。
+2. **フロントエンドを起動**:
+   ```
+   python -m http.server 8000
+   ```
 
-3. **ログインフローの確認**  
-   - ブラウザで`http://localhost:8000/index.html`を開きます。
-   - 「Log in」ボタンをクリックしてAuth0のログインページにリダイレクトされます。
-   - ログイン後、Goサーバがトークンを発行し、クッキーに保存します。
-
-4. **保護されたエンドポイントへのアクセス**  
-   - 「Access Protected Resource」をクリックします。
-   - 認証前は「Access Denied: Unauthorized」と表示されます。
-   - 認証後は「You have accessed a protected resource!」と表示されます。
+3. ブラウザで `http://localhost:8000/index.html` を開き、以下を確認:
+   - **Log in** ボタンでログインフローを確認。
+   - **Access Protected Resource** ボタンで認証済みリソースへのアクセスを確認。
+   - **Log out** ボタンでログアウトし、認証済みリソースにアクセスできないことを確認。
 
 ---
 
-## 結論
-
-この記事では、Auth0を利用してGoバックエンドの認証フローを構築し、フロントエンドと連携する完全なシステムを作成しました。ローカルサーバを使用してセキュリ
+これでログアウト機能を含めたフルセットのシステムが完成します！必要に応じて調整してください。質問があればお知らせください！ 🎉
