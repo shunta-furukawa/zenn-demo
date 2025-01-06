@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Auth0 Protected Test</title>
+</head>
+<body>
+    <h1>Auth0 Protected Endpoint Test</h1>
+    <button id="login-button">Log in</button>
+    <button id="protected-button">Access Protected Resource</button>
+    <p id="result"></p>
+
+    <script>
+        document.getElementById('login-button').addEventListener('click', () => {
+            window.location.href = 'http://localhost:3000/login';
+        });
+
+        document.getElementById('protected-button').addEventListener('click', async () => {
+            try {
+                const response = await fetch('http://localhost:3000/protected', { credentials: 'include' });
+                if (response.ok) {
+                    const text = await response.text();
+                    document.getElementById('result').innerText = text;
+                } else {
+                    document.getElementById('result').innerText = 'Access Denied: Unauthorized';
+                }
+            } catch (err) {
+                console.error(err);
+                document.getElementById('result').innerText = 'Error accessing protected resource';
+            }
+        });
+    </script>
+</body>
+</html>
