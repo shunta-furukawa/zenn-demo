@@ -55,24 +55,72 @@ gRPCでは、クライアントとサーバーの両方でKeepalive設定を行�
 
 ---
 
-## 3. 実際のコード例
+## toxiproxy を使った gRPC Keepalive 検証
 
-以下は、クライアントとサーバーでKeepaliveを設定するgRPCコードの例です。
+---
 
-### サーバー側
+## 1. toxiproxy のインストール
+
+### macOSの場合
+
+以下のコマンドで `toxiproxy` をインストールします。
+
+```go
+brew install toxiproxy
+```
+
+---
+
+## 2. toxiproxy サーバーの起動
+
+以下のコマンドで `toxiproxy` のサーバーを起動します。
+
+```
+toxiproxy-server
+```
+
+デフォルトでは、`localhost:8474` で REST API サーバーが起動します。
+
+---
+
+## 3. toxiproxy CLI を使ってプロキシを作成
+
+toxiproxy を使って、gRPC サーバー（例: `localhost:50051`）へのプロキシを作成します。
+
+```go
+toxiproxy-cli create grpc_proxy --listen localhost:50052 --upstream localhost:50051
+```
+
+これにより、gRPC クライアントは `localhost:50052` を経由してサーバーに接続するようになります。
+
+---
+
+## 4. gRPC サーバーコード
+
+以下は、Keepaliveの設定を含んだサーバーコードの例です。
 
 ```go
 package main
 
 import (
+    "context"
     "log"
     "net"
     "time"
 
     "google.golang.org/grpc"
     "google.golang.org/grpc/keepalive"
-    pb "example/protobuf"
+    pb "example"
 )
+
+type server struct {
+    pb.UnimplementedYourServiceServer
+}
+
+func (s *server) YourRPCMethod(ctx context.Context, in *pb.YourRequest) (*pb.YourResponse, error) {
+    log.Printf("Received: %v", in.Name)
+    return &pb.YourResponse{Message: "Hello " + in.Name}, nil
+}
 
 func main() {
     lis, err := net.Listen("tcp", ":50051")
@@ -80,45 +128,50 @@ func main() {
         log.Fatalf("Failed to listen: %v", err)
     }
 
-    server := grpc.NewServer(
+    // Keepalive設定
+    grpcServer := grpc.NewServer(
         grpc.KeepaliveParams(keepalive.ServerParameters{
-            Time:    10 * time.Second,
-            Timeout: 5 * time.Second,
-        }),
-        grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
-            MinTime:             5 * time.Second,
-            PermitWithoutStream: true,
+            Time:    10 * time.Second, // サーバーからPINGを送信する間隔
+            Timeout: 5 * time.Second,  // PING応答の待機時間
         }),
     )
 
-    pb.RegisterYourServiceServer(server, &YourService{})
-    log.Println("Server is running on port 50051...")
-    server.Serve(lis)
+    pb.RegisterYourServiceServer(grpcServer, &server{})
+
+    log.Println("Server is running on port 50051")
+    if err := grpcServer.Serve(lis); err != nil {
+        log.Fatalf("Failed to serve: %v", err)
+    }
 }
 ```
 
-### クライアント側
+---
+
+## 5. gRPC クライアントコード
+
+以下は、Keepaliveの設定を含んだクライアントコードの例です。
 
 ```go
 package main
 
 import (
+    "context"
     "log"
     "time"
 
     "google.golang.org/grpc"
     "google.golang.org/grpc/keepalive"
-    pb "example/protobuf"
+    pb "example"
 )
 
 func main() {
     conn, err := grpc.Dial(
-        "localhost:50051",
+        "localhost:50052", // toxiproxy 経由で接続
         grpc.WithInsecure(),
         grpc.WithKeepaliveParams(keepalive.ClientParameters{
-            Time:                10 * time.Second,
-            Timeout:             5 * time.Second,
-            PermitWithoutStream: true,
+            Time:                10 * time.Second, // クライアントからPINGを送信する間隔
+            Timeout:             5 * time.Second,  // PING応答の待機時間
+            PermitWithoutStream: true,             // ストリームがなくてもPINGを送信
         }),
     )
     if err != nil {
@@ -127,49 +180,72 @@ func main() {
     defer conn.Close()
 
     client := pb.NewYourServiceClient(conn)
-    log.Println("Client connected")
+
+    for {
+        ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+        defer cancel()
+
+        response, err := client.YourRPCMethod(ctx, &pb.YourRequest{Name: "World"})
+        if err != nil {
+            log.Printf("RPC failed: %v", err)
+        } else {
+            log.Printf("Response from server: %s", response.Message)
+        }
+
+        time.Sleep(5 * time.Second)
+    }
 }
 ```
 
 ---
 
-## 4. 設定を変更して挙動を検証する
+## 6. toxiproxy を使った障害シミュレーション
 
+### 接続を一時的に遮断する
 
-### サーバーの起動
-上記の`server.go`を実行し、サーバーを起動します。
-
-```
-go run server.go
-```
-
-### クライアントの実行
-別のターミナルで`client.go`を実行し、サーバーに接続してRPCを呼び出します。
+以下のコマンドで、gRPC サーバーとの通信を一時的に遮断します。
 
 ```
-go run client.go
+toxiproxy-cli toggle grpc_proxy
 ```
 
-### ネットワークの切断シミュレーション
-サーバーまたはクライアントのネットワーク接続をシミュレートするため、`iptables`コマンドを使用して特定のポートへの通信をブロックします。
+- `toggle` コマンドを実行するたびに、接続の有効/無効が切り替わります。
+- 接続が無効化されている間、クライアントは Keepalive の再試行を行います。
 
-#### サーバー側でのブロック例
+---
+
+### 遅延を追加する
+
+以下のコマンドで、通信に遅延を追加します（例: 1000ms）。
+
 ```
-sudo iptables -A INPUT -p tcp --dport 50051 -j DROP
+toxiproxy-cli toxic add grpc_proxy -t latency -a latency=1000
 ```
 
-#### クライアント側でのブロック例
+これにより、クライアントとサーバー間の通信に 1 秒の遅延が追加されます。
+
+---
+
+### パケットロスをシミュレーションする
+
+以下のコマンドで、50% のパケットロスをシミュレーションします。
+
 ```
-sudo iptables -A OUTPUT -p tcp --dport 50051 -j DROP
+toxiproxy-cli toxic add grpc_proxy -t limit_data -a bytes=1024
 ```
 
+---
 
-3. Keepaliveの設定値を変更して接続の維持や切断の挙動を確認します。
+## 7. 検証結果
 
-### 検証ポイント
+- **接続断（`toggle`）**  
+  クライアントが接続断を検知し、Keepalive の再接続動作を確認できます。
 
-- **TimeやTimeoutを短く設定**: ネットワーク障害が検知されるまでの時間を観察。
-- **PermitWithoutStreamの有効/無効化**: ストリームがない状態での接続維持をテスト。
+- **遅延（`latency`）**  
+  クライアントが遅延に対してどのように応答するか、またタイムアウトが正しく発生するかを確認できます。
+
+- **パケットロス（`limit_data`）**  
+  パケットロス時に Keepalive の再送が適切に行われるかを確認できます。
 
 ---
 

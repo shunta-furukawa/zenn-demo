@@ -4,9 +4,11 @@ import (
 	"context"
 	"log"
 	"net"
+	"time"
 
 	pb "github.com/shunta-furukawa/zenn-demo/562e8d092d264f/example"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/keepalive"
 )
 
 type server struct {
@@ -24,7 +26,18 @@ func main() {
 		log.Fatalf("Failed to listen: %v", err)
 	}
 
-	grpcServer := grpc.NewServer()
+	// Keepalive設定
+	grpcServer := grpc.NewServer(
+		grpc.KeepaliveParams(keepalive.ServerParameters{
+			Time:    10 * time.Second, // サーバーからPINGを送信する間隔
+			Timeout: 5 * time.Second,  // PING応答の待機時間
+		}),
+		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
+			MinTime:             5 * time.Second, // クライアントPINGの最小間隔
+			PermitWithoutStream: true,            // ストリームがなくてもPINGを許可
+		}),
+	)
+
 	pb.RegisterYourServiceServer(grpcServer, &server{})
 
 	log.Println("Server is running on port 50051")
