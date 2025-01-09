@@ -55,47 +55,79 @@ gRPCでは、クライアントとサーバーの両方でKeepalive設定を行�
 
 ---
 
-## toxiproxy を使った gRPC Keepalive 検証
+## 3. gRPC の Keepalive の挙動を確かめる 
+
+### 不安定なネットワーク環境を再現するために
+
+gRPCのKeepalive設定を検証する際、ネットワーク障害や接続遅延などの「不安定な環境」をシミュレーションすることが重要です。しかし、通常のネットワーク環境では、こうした状況を簡単に再現することが難しい場合があります。
+
+そこで役立つのが **`toxiproxy`** です。`toxiproxy` は、ネットワークの障害や遅延をシミュレーションできる軽量プロキシツールで、接続断やパケットロス、遅延など、さまざまな障害状況を簡単に再現できます。
 
 ---
 
-## 1. toxiproxy のインストール
+### なぜ toxiproxy が有効なのか？
 
-### macOSの場合
+1. **柔軟なシミュレーション**  
+   - 一時的な接続断、特定の遅延、パケットロスなど、ネットワークの異常を細かくコントロールできます。
+   - これにより、Keepaliveの再接続やエラーハンドリングが正しく機能するか確認できます。
+
+2. **簡単な導入**  
+   - インストールと設定が簡単で、REST API や CLI を使って障害をリアルタイムで操作可能です。
+
+3. **gRPCとの相性が良い**  
+   - gRPCは通常、長期間接続を維持するため、toxiproxyのようなプロキシを挟むことで、障害発生時の動作を詳細にテストできます。
+
+---
+
+### toxiproxy の公式情報
+
+`toxiproxy` の公式リポジトリは以下のURLから確認できます。  
+[Shopify/toxiproxy - GitHub](https://github.com/Shopify/toxiproxy)
+
+ここからダウンロードや使い方の詳細なドキュメントを確認できます。
+
+---
+
+### toxiproxy を用いた検証環境を作成 
+
+#### 1. toxiproxy のインストール
+
+##### macOSの場合
 
 以下のコマンドで `toxiproxy` をインストールします。
 
-```go
-brew install toxiproxy
+```zsh
+$ brew install toxiproxy
 ```
 
 ---
 
-## 2. toxiproxy サーバーの起動
+#### 2. toxiproxy サーバーの起動
 
 以下のコマンドで `toxiproxy` のサーバーを起動します。
 
-```
-toxiproxy-server
+```zsh 
+$ toxiproxy-server
 ```
 
 デフォルトでは、`localhost:8474` で REST API サーバーが起動します。
 
 ---
 
-## 3. toxiproxy CLI を使ってプロキシを作成
+#### 3. toxiproxy CLI を使ってプロキシを作成
 
 toxiproxy を使って、gRPC サーバー（例: `localhost:50051`）へのプロキシを作成します。
 
-```go
-toxiproxy-cli create grpc_proxy --listen localhost:50052 --upstream localhost:50051
+```zsh 
+$ toxiproxy-cli create --listen localhost:50052 --upstream localhost:50051 grpc_proxy
+Created new proxy grpc_proxy
 ```
 
 これにより、gRPC クライアントは `localhost:50052` を経由してサーバーに接続するようになります。
 
 ---
 
-## 4. gRPC サーバーコード
+#### 4. gRPC サーバーコード
 
 以下は、Keepaliveの設定を含んだサーバーコードの例です。
 
@@ -114,40 +146,46 @@ import (
 )
 
 type server struct {
-    pb.UnimplementedYourServiceServer
+	pb.UnimplementedYourServiceServer
 }
 
 func (s *server) YourRPCMethod(ctx context.Context, in *pb.YourRequest) (*pb.YourResponse, error) {
-    log.Printf("Received: %v", in.Name)
-    return &pb.YourResponse{Message: "Hello " + in.Name}, nil
+	log.Printf("Received: %v", in.Name)
+	return &pb.YourResponse{Message: "Hello " + in.Name}, nil
 }
 
 func main() {
-    lis, err := net.Listen("tcp", ":50051")
-    if err != nil {
-        log.Fatalf("Failed to listen: %v", err)
-    }
+	lis, err := net.Listen("tcp", ":50051")
+	if err != nil {
+		log.Fatalf("Failed to listen: %v", err)
+	}
 
-    // Keepalive設定
-    grpcServer := grpc.NewServer(
-        grpc.KeepaliveParams(keepalive.ServerParameters{
-            Time:    10 * time.Second, // サーバーからPINGを送信する間隔
-            Timeout: 5 * time.Second,  // PING応答の待機時間
-        }),
-    )
+	// Keepalive設定
+	grpcServer := grpc.NewServer(
+		grpc.KeepaliveParams(keepalive.ServerParameters{
+      // 検証のため短めに
+			Time:    1 * time.Second, // サーバーからPINGを送信する間隔
+			Timeout: 1 * time.Second, // PING応答の待機時間
+		}),
+		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
+			MinTime:             5 * time.Second, // クライアントPINGの最小間隔
+			PermitWithoutStream: true,            // ストリームがなくてもPINGを許可
+		}),
+	)
 
-    pb.RegisterYourServiceServer(grpcServer, &server{})
+	pb.RegisterYourServiceServer(grpcServer, &server{})
 
-    log.Println("Server is running on port 50051")
-    if err := grpcServer.Serve(lis); err != nil {
-        log.Fatalf("Failed to serve: %v", err)
-    }
+	log.Println("Server is running on port 50051")
+	if err := grpcServer.Serve(lis); err != nil {
+		log.Fatalf("Failed to serve: %v", err)
+	}
 }
+
 ```
 
 ---
 
-## 5. gRPC クライアントコード
+#### 5. gRPC クライアントコード
 
 以下は、Keepaliveの設定を含んだクライアントコードの例です。
 
@@ -165,48 +203,52 @@ import (
 )
 
 func main() {
-    conn, err := grpc.Dial(
-        "localhost:50052", // toxiproxy 経由で接続
-        grpc.WithInsecure(),
-        grpc.WithKeepaliveParams(keepalive.ClientParameters{
-            Time:                10 * time.Second, // クライアントからPINGを送信する間隔
-            Timeout:             5 * time.Second,  // PING応答の待機時間
-            PermitWithoutStream: true,             // ストリームがなくてもPINGを送信
-        }),
-    )
-    if err != nil {
-        log.Fatalf("Failed to connect: %v", err)
-    }
-    defer conn.Close()
+	conn, err := grpc.Dial(
+		"localhost:50052", // toxiproxy 経由で接続
+		grpc.WithInsecure(),
+		grpc.WithKeepaliveParams(keepalive.ClientParameters{
+			Time:                1 * time.Second, // 1秒ごとにPINGフレームを送信
+			Timeout:             1 * time.Second, // 1秒間応答がない場合に接続を切断
+			PermitWithoutStream: true,            // ストリームがなくてもPINGを送信
+		}),
+	)
+	if err != nil {
+		log.Fatalf("Failed to connect: %v", err)
+	}
+	defer conn.Close()
 
-    client := pb.NewYourServiceClient(conn)
+	client := pb.NewYourServiceClient(conn)
 
-    for {
-        ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-        defer cancel()
+	for {
+		// アプリケーションのタイムアウトは十分に長く 30秒 に設定
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
 
-        response, err := client.YourRPCMethod(ctx, &pb.YourRequest{Name: "World"})
-        if err != nil {
-            log.Printf("RPC failed: %v", err)
-        } else {
-            log.Printf("Response from server: %s", response.Message)
-        }
+		response, err := client.YourRPCMethod(ctx, &pb.YourRequest{Name: "World"})
+		if err != nil {
+			log.Printf("RPC failed: %v", err)
+		} else {
+			log.Printf("Response from server: %s", response.Message)
+		}
 
-        time.Sleep(5 * time.Second)
-    }
+		time.Sleep(1 * time.Second)
+	}
 }
+
 ```
 
 ---
 
-## 6. toxiproxy を使った障害シミュレーション
+#### 6. toxiproxy の 基本的な機能 
 
-### 接続を一時的に遮断する
+toxiproxy を使うと以下のようなことができます。 
+
+##### 接続を一時的に遮断する
 
 以下のコマンドで、gRPC サーバーとの通信を一時的に遮断します。
 
-```
-toxiproxy-cli toggle grpc_proxy
+```zsh
+$ toxiproxy-cli toggle grpc_proxy
 ```
 
 - `toggle` コマンドを実行するたびに、接続の有効/無効が切り替わります。
@@ -214,38 +256,148 @@ toxiproxy-cli toggle grpc_proxy
 
 ---
 
-### 遅延を追加する
+##### 今の設定を確認する 
+
+以下のコマンドで、toxiproxy の設定を確認できます。 
+
+```zsh
+$ toxiproxy-cli inspect grpc_proxy
+Name: grpc_proxy        Listen: 127.0.0.1:50052 Upstream: localhost:50051
+======================================================================
+Proxy has no toxics enabled.
+
+Hint: add a toxic with `toxiproxy-cli toxic add`
+```
+
+##### 遅延を追加する
 
 以下のコマンドで、通信に遅延を追加します（例: 1000ms）。
 
-```
-toxiproxy-cli toxic add grpc_proxy -t latency -a latency=1000
+```zsh
+$ toxiproxy-cli toxic add -t latency -a latency=1000 grpc_proxy
 ```
 
 これにより、クライアントとサーバー間の通信に 1 秒の遅延が追加されます。
 
+```zsh 
+$ toxiproxy-cli inspect grpc_proxy
+Name: grpc_proxy        Listen: 127.0.0.1:50052 Upstream: localhost:50051
+======================================================================
+Upstream toxics:
+Proxy has no Upstream toxics enabled.
+
+Downstream toxics:
+latency_downstream:     type=latency    stream=downstream       toxicity=1.00   attributes=[    jitter=0        latency=1000    ]
+
+Hint: add a toxic with `toxiproxy-cli toxic add`
+``` 
+
+削除したい場合は 以下を実行すると削除できます 
+
+```zsh 
+$ toxiproxy-cli toxic remove -n latency_downstream grpc_proxy
+```
+
 ---
 
-### パケットロスをシミュレーションする
+#### 7. toxic を使った検証 
 
-以下のコマンドで、50% のパケットロスをシミュレーションします。
+##### 7-1. **接続断のシミュレーション（`toxiproxy-cli toggle grpc_proxy`）**
 
+**Keepalive設定値（クライアント側）**:
+
+```go
+keepalive.ClientParameters{
+    Time:                5 * time.Second, // 10秒ごとにPINGフレームを送信
+    Timeout:             2 * time.Second,  // 5秒間応答がない場合に接続を切断
+    PermitWithoutStream: true,             // ストリームがなくてもPINGを送信
+}
 ```
-toxiproxy-cli toxic add grpc_proxy -t limit_data -a bytes=1024
+
+**手順**:
+1. `toxiproxy-cli toggle grpc_proxy` を実行して接続を無効化。
+2. クライアントがKeepaliveのPINGを送信し、応答がないことを検知。
+
+**クライアントの標準出力**:
+```zsh
+Response from server: Hello World
+RPC failed: rpc error: code = Unavailable desc = connection error: desc = "transport: Error while dialing: dial tcp [::1]:50052: connect: connection refused"
 ```
+
+- **解説**:  
+  - クライアントは10秒ごとにPINGを送信しますが、`toxiproxy`によって接続が遮断されるため応答が得られません。
+  - 5秒以内に応答がないため、gRPCのトランスポート層で接続が閉じられ、エラー `rpc error: code = Unavailable` が発生します。
 
 ---
 
-## 7. 検証結果
+##### 7-2. **遅延のシミュレーション（`toxiproxy-cli toxic add grpc_proxy -t latency -a latency=3000`）**
 
-- **接続断（`toggle`）**  
-  クライアントが接続断を検知し、Keepalive の再接続動作を確認できます。
+**手順**:
+1. `toxiproxy-cli toxic add -t latency -a latency=3000 grpc_proxy` を実行して3秒の遅延を追加。
+2. クライアントがPINGを送信するも、遅延によりタイムアウトが発生。
 
-- **遅延（`latency`）**  
-  クライアントが遅延に対してどのように応答するか、またタイムアウトが正しく発生するかを確認できます。
+**クライアントの標準出力**:
 
-- **パケットロス（`limit_data`）**  
-  パケットロス時に Keepalive の再送が適切に行われるかを確認できます。
+```zsh
+Response from server: Hello World
+RPC failed: rpc error: code = Unavailable desc = error reading from server: EOF
+```
+
+- **解説**:
+
+1. **最初のレスポンス成功 (`Response from server: Hello World`)**  
+   クライアントは最初のリクエストを正常にサーバーに送り、サーバーからのレスポンスを受け取っています。この段階では、`toxiproxy` による遅延の影響を受けていないため、通信が成功しています。
+
+2. **その後の切断 (`RPC failed: rpc error: code = Unavailable desc = error reading from server: EOF`)**  
+   クライアントは `Keepalive.ClientParameters` の設定に基づき、1秒ごとにPINGフレームを送信します。しかし、`toxiproxy` による3秒の遅延が発生しているため、サーバーからのPING応答がタイムアウト (`Timeout: 1 * time.Second`) に間に合いません。
+
+   加えて、サーバー側の `MinTime: 5 * time.Second` 設定により、クライアントが1秒ごとにPINGを送信することが「違反」と見なされ、サーバーがクライアントを切断します。その結果、クライアントがサーバーから接続終了の通知 (`EOF`) を受け取り、エラーとしてログに出力されます。
+
+これらの要因が組み合わさり、最初は正常なレスポンスが出力され、その後にエラーが発生するログが記録されています。
+
+---
+
+##### 7-3. **Keepaliveを緩和した場合の結果**
+
+**Keepalive設定値（サーバ側）**:
+```go
+keepalive.ServerParameters{
+			Time:    10 * time.Second, // サーバーからPINGを送信する間隔
+			Timeout: 10 * time.Second, // PING応答の待機時間
+}
+```
+
+**Keepalive設定値（クライアント側）**:
+```go
+keepalive.ClientParameters{
+    Time:                10 * time.Second, // 20秒ごとにPINGフレームを送信
+    Timeout:             10 * time.Second, // 15秒間応答がない場合に接続を切断
+    PermitWithoutStream: true,             // ストリームがなくてもPINGを送信
+}
+```
+
+**手順**:
+1. サーバのKeepalive の設定を上記の通りに伸ばして再起動します。
+2. 緩やかなKeepalive設定のため、切断が発生するまでの時間が長くなります。
+
+**クライアントの標準出力**:
+```go
+RPC succeeded: Response from server: Hello World
+```
+
+- **解説**:  
+  - Timeoutが15秒に設定されているため、遅延やパケットロスが一時的であれば、PING応答が間に合う場合があります。
+  - 接続が維持され、エラーが発生しないケースもあります。
+
+---
+
+##### 7-検証から得られる知見
+
+- Keepaliveの設定値（`Time` や `Timeout`）は、ネットワークの特性に合わせて調整する必要があります。
+- 遅延やパケットロスが頻発する環境では、**Timeoutを長めに設定**することで接続の安定性を確保できます。
+- 一方で、迅速な障害検知が求められる場合には、**Timeoutを短めに設定**し、早期に再接続を試みる動作が有効です。
+
+以上のように、`toxiproxy` を活用することで、gRPCのKeepalive設定値が接続の安定性やエラーハンドリングにどのような影響を与えるかを詳細に検証できます。適切な設定値を選ぶことで、システムの信頼性を高めることができます。
 
 ---
 

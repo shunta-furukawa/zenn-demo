@@ -15,9 +15,9 @@ func main() {
 		"localhost:50052", // toxiproxy 経由で接続
 		grpc.WithInsecure(),
 		grpc.WithKeepaliveParams(keepalive.ClientParameters{
-			Time:                10 * time.Second, // クライアントからPINGを送信する間隔
-			Timeout:             5 * time.Second,  // PING応答の待機時間
-			PermitWithoutStream: true,             // ストリームがなくてもPINGを送信
+			Time:                1 * time.Second, // 1秒ごとにPINGフレームを送信
+			Timeout:             1 * time.Second, // 1秒間応答がない場合に接続を切断
+			PermitWithoutStream: true,            // ストリームがなくてもPINGを送信
 		}),
 	)
 	if err != nil {
@@ -28,7 +28,8 @@ func main() {
 	client := pb.NewYourServiceClient(conn)
 
 	for {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		// アプリケーションのタイムアウトは十分に長く 30秒 に設定
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
 		response, err := client.YourRPCMethod(ctx, &pb.YourRequest{Name: "World"})
@@ -38,6 +39,6 @@ func main() {
 			log.Printf("Response from server: %s", response.Message)
 		}
 
-		time.Sleep(5 * time.Second)
+		time.Sleep(1 * time.Second)
 	}
 }

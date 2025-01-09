@@ -29,8 +29,8 @@ func main() {
 	// Keepalive設定
 	grpcServer := grpc.NewServer(
 		grpc.KeepaliveParams(keepalive.ServerParameters{
-			Time:    10 * time.Second, // サーバーからPINGを送信する間隔
-			Timeout: 5 * time.Second,  // PING応答の待機時間
+			Time:    1 * time.Second, // サーバーからPINGを送信する間隔
+			Timeout: 1 * time.Second, // PING応答の待機時間
 		}),
 		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
 			MinTime:             5 * time.Second, // クライアントPINGの最小間隔
