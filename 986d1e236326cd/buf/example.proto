@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+package example;
+
+// 追加: go_package オプション
+option go_package = "github.com/shunta-furukawa/zenn-demo/986d1e236326cd/example";
+
+service YourService {
+  rpc YourRPCMethod (YourRequest) returns (YourResponse);
+}
+
+message YourRequest {
+  string name = 1;
+}
+
+message YourResponse {
+  string message = 1;
+}
