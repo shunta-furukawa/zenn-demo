@@ -20,7 +20,9 @@
 zenn-demo/
 ├── 562e8d092d264f/ -> gRPCのKeepalive設定について調べてみた
 ├── 486ccfd8b1f78b/ -> GoとAuth0で実現するセキュアな認証: HttpOnlyクッキーの活用法
-├── 5e246c1f52a013/ -> oのHTTPサーバー：Gin、Echo、muxの比較と選び方
+├── 5e246c1f52a013/ -> GoのHTTPサーバー：Gin、Echo、muxの比較と選び方
+├── 986d1e236326cd/ -> protoファイルからのコード生成: protoc と buf の比較
+├── e60703bdd267f2/ -> Go のコードをプログラマティックに把握する
 └── ...
 ```
 
