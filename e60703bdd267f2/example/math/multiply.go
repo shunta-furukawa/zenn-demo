@@ -1,5 +1,8 @@
 package math
 
 func Multiply(a, b int) int {
-	return a * b
+	for i := 0; i < b; i++ {
+		a = Add(a, a)
+	}
+	return a
 }
