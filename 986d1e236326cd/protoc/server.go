@@ -6,7 +6,7 @@ import (
 	"net"
 	"time"
 
-	pb "github.com/shunta-furukawa/zenn-demo/562e8d092d264f/example"
+	pb "github.com/shunta-furukawa/zenn-demo/986d1e236326cd/example"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/keepalive"
 )
