@@ -1,4 +1,4 @@
-module github.com/shunta-furukawa/zenn-demo/986d1e236326cd
+module github.com/shunta-furukawa/zenn-demo/986d1e236326cd/protoc
 
 go 1.22.4
 
