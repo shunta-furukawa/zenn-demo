@@ -1,0 +1,11 @@
+go 1.23.4
+
+use (
+	./486ccfd8b1f78b
+	./562e8d092d264f
+	./5e246c1f52a013
+	./986d1e236326cd/buf
+	./986d1e236326cd/protoc
+	./e60703bdd267f2
+	./e60703bdd267f2/example
+)
