@@ -3,11 +3,11 @@ package server
 import (
 	"context"
 
-	pb "github.com/shunta-furukawa/zenn-demo/6069599ddfb165/example"
+	"github.com/shunta-furukawa/zenn-demo/6069599ddfb165/example/example"
 )
 
 type ExampleServer struct {
-	pb.UnimplementedExampleServiceServer
+	example.UnimplementedExampleServiceServer
 	CulcService  *CulcService
 	PrintService *PrintService
 }
@@ -20,12 +20,12 @@ func NewExampleServer(c *CulcService, p *PrintService) *ExampleServer {
 }
 
 // Culc RPC
-func (s *ExampleServer) Culc(ctx context.Context, req *pb.CulcRequest) (*pb.CulcResponse, error) {
+func (s *ExampleServer) Culc(ctx context.Context, req *example.CulcRequest) (*example.CulcResponse, error) {
 	// CulcService の Multiply を呼び出して計算
 	result := s.CulcService.Multiply(req.A, req.B)
 
 	// PrintService の Print を使用して結果を整形
 	message := s.PrintService.Print(result)
 
-	return &pb.CulcResponse{Message: message}, nil
+	return &example.CulcResponse{Message: message}, nil
 }

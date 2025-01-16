@@ -4,6 +4,8 @@ import (
 	"log"
 	"net"
 
+	"github.com/shunta-furukawa/zenn-demo/6069599ddfb165/example/example"
+	"github.com/shunta-furukawa/zenn-demo/6069599ddfb165/example/server"
 	"google.golang.org/grpc"
 )
 
@@ -22,7 +24,7 @@ func main() {
 	}
 
 	grpcServer := grpc.NewServer()
-	pb.RegisterExampleServiceServer(grpcServer, exampleServer)
+	example.RegisterExampleServiceServer(grpcServer, exampleServer)
 
 	log.Println("Server is running on port :50051")
 	if err := grpcServer.Serve(listener); err != nil {
