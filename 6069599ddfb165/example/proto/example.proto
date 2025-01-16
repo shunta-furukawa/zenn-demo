@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+package example;
+
+option go_package = "github.com/shunta-furukawa/zenn-demo/6069599ddfb165/example";
+
+service ExampleService {
+  rpc Culc(CulcRequest) returns (CulcResponse);
+}
+
+message CulcRequest {
+  int32 a = 1;
+  int32 b = 2;
+}
+
+message CulcResponse {
+  string message = 1;
+}
