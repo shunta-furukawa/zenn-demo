@@ -4,9 +4,6 @@ import (
 	"log"
 	"net"
 
-	pb "example/proto"
-	"example/server"
-
 	"google.golang.org/grpc"
 )
 

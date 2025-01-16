@@ -3,7 +3,7 @@ package server
 import (
 	"context"
 
-	pb "example/proto"
+	pb "github.com/shunta-furukawa/zenn-demo/6069599ddfb165/example"
 )
 
 type ExampleServer struct {
