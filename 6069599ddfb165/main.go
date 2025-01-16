@@ -10,10 +10,22 @@ import (
 	"golang.org/x/tools/go/packages"
 )
 
+// FunctionDefinition は、呼び出し先関数の情報をまとめた構造体
+type FunctionDefinition struct {
+	Pkg  string        // パッケージ名 (構造体やメソッドが属する実装パッケージ)
+	Name string        // 関数(メソッド)名
+	Node *ast.FuncDecl // 関数ノード
+}
+
 func main() {
 	cfg := &packages.Config{
-		Mode: packages.NeedName | packages.NeedSyntax | packages.NeedFiles | packages.NeedTypes | packages.NeedTypesInfo | packages.NeedDeps,
-		Dir:  "./example", // 解析対象のディレクトリを指定
+		Mode: packages.NeedName |
+			packages.NeedSyntax |
+			packages.NeedFiles |
+			packages.NeedTypes |
+			packages.NeedTypesInfo |
+			packages.NeedDeps,
+		Dir: "./example", // 解析対象ディレクトリ。必要に応じて調整
 	}
 
 	pkgs, err := packages.Load(cfg, "./...")
@@ -22,28 +34,38 @@ func main() {
 		return
 	}
 
-	// パッケージ情報をマップに格納 (後で依存関係解析に使用)
+	// パッケージ情報をマップに格納 (あとで依存関係解析に使用)
 	pkgMap := make(map[string]*packages.Package)
 	for _, pkg := range pkgs {
 		pkgMap[pkg.PkgPath] = pkg
 	}
 
-	// `main` 関数を探して解析
+	// --- 例: main 関数の呼び出し解析をやりたい場合 ---
+	fmt.Println("=== Analyzing main function calls ===")
 	for _, pkg := range pkgs {
 		for _, file := range pkg.Syntax {
 			analyzeMainFunction(file, pkg.Fset, pkg.TypesInfo, pkgMap)
 		}
 	}
+
+	// --- gRPC サービス実装の解析 ---
+	fmt.Println("\n=== Analyzing gRPC service registrations ===")
+	for _, pkg := range pkgs {
+		for _, file := range pkg.Syntax {
+			analyzeGRPCRegistration(file, pkg.Fset, pkg.TypesInfo, pkgMap)
+		}
+	}
 }
 
-// `main` 関数の呼び出し順を解析
+// analyzeMainFunction は、main 関数を探して呼び出しを解析
 func analyzeMainFunction(file *ast.File, fset *token.FileSet, typesInfo *types.Info, pkgMap map[string]*packages.Package) {
 	ast.Inspect(file, func(n ast.Node) bool {
-		// `main` 関数を探す
-		if fn, ok := n.(*ast.FuncDecl); ok && fn.Name.Name == "main" {
+		fn, ok := n.(*ast.FuncDecl)
+		if !ok {
+			return true
+		}
+		if fn.Name.Name == "main" {
 			fmt.Printf("Analyzing calls in function: %s\n", fn.Name.Name)
-
-			// 関数内の呼び出し順を解析
 			visited := make(map[string]bool)
 			extractCallSequence(fn.Body, 0, typesInfo, pkgMap, visited)
 		}
@@ -51,15 +73,117 @@ func analyzeMainFunction(file *ast.File, fset *token.FileSet, typesInfo *types.I
 	})
 }
 
-// 関数呼び出しを順番に出力し、再帰的に解析
+// analyzeGRPCRegistration は、RegisterExampleServiceServer(...) の呼び出しを探し、
+// 第2引数 (サーバ実装) の型を調べてその実装メソッドを解析する。
+func analyzeGRPCRegistration(file *ast.File, fset *token.FileSet, typesInfo *types.Info, pkgMap map[string]*packages.Package) {
+	ast.Inspect(file, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		// 関数呼び出しが RegisterExampleServiceServer(...) かどうか
+		if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
+			if sel.Sel != nil && sel.Sel.Name == "RegisterExampleServiceServer" {
+				// 引数が2つ: RegisterExampleServiceServer(registrar, server)
+				if len(call.Args) == 2 {
+					serverArg := call.Args[1]
+					analyzeServerArg(serverArg, typesInfo, pkgMap)
+				}
+			}
+		}
+		return true
+	})
+}
+
+// analyzeServerArg は RegisterExampleServiceServer の第2引数 (サーバ実装) の型を取得し、
+// その「実装パッケージ」へ移動してメソッドを AST 解析する。
+func analyzeServerArg(serverArg ast.Expr, typesInfo *types.Info, pkgMap map[string]*packages.Package) {
+	obj := typesInfo.ObjectOf(getIdent(serverArg))
+	if obj == nil {
+		return
+	}
+	serverType := obj.Type()
+	if serverType == nil {
+		return
+	}
+	fmt.Printf("[ServerArg] Type: %s\n", serverType.String())
+
+	// ポインタ型等を剥がして最終的に *types.Named を取り出す
+	underlying := serverType
+	for {
+		if ptr, ok := underlying.(*types.Pointer); ok {
+			underlying = ptr.Elem()
+		} else {
+			break
+		}
+	}
+	named, _ := underlying.(*types.Named)
+	if named == nil {
+		fmt.Printf("Not a named type: %s\n", underlying.String())
+		return
+	}
+
+	// ---- ここがポイント: 実際の「構造体を定義しているパッケージ」を取得 ----
+	serverPkgPath := named.Obj().Pkg().Path()
+	serverPkg := pkgMap[serverPkgPath]
+	if serverPkg == nil {
+		fmt.Printf("Server package not found in pkgMap: %s\n", serverPkgPath)
+		return
+	}
+	fmt.Printf("Analyzing server implementation package: %s\n", serverPkgPath)
+
+	// サーバ型(構造体)のメソッド一覧を列挙
+	for i := 0; i < named.NumMethods(); i++ {
+		method := named.Method(i)
+		if !method.Exported() {
+			continue
+		}
+		// AST から該当のメソッド定義 (FuncDecl) を探す
+		fnDef := findFunctionDeclInPackage(serverPkg, method)
+		if fnDef == nil {
+			continue
+		}
+		// RPC 実装メソッドを解析
+		fmt.Printf("Analyzing RPC method: %s.%s\n", fnDef.Pkg, fnDef.Name)
+		visited := make(map[string]bool)
+		extractCallSequence(fnDef.Node.Body, 0, serverPkg.TypesInfo, pkgMap, visited)
+	}
+}
+
+// findFunctionDeclInPackage は指定パッケージ内で、指定されたメソッド (types.Object) に合致する
+// `FuncDecl` を探し、見つかったら返す。
+func findFunctionDeclInPackage(pkg *packages.Package, method types.Object) *FunctionDefinition {
+	for _, f := range pkg.Syntax {
+		for _, decl := range f.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok {
+				continue
+			}
+			// 関数名 (メソッド名) が合致するか
+			// レシーバー型の一致チェックなどを厳密にやる場合は、fn.Recv をさらに確認
+			// （本サンプルでは名前だけを比較）
+			if fn.Name.Name == method.Name() {
+				return &FunctionDefinition{
+					Pkg:  method.Pkg().Name(), // or pkg.Name
+					Name: method.Name(),
+					Node: fn,
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// extractCallSequence は与えられたノード配下の関数呼び出しを順番に出力し、
+// さらに呼び出し先関数が同パッケージ内にあれば再帰的に解析する。
 func extractCallSequence(node ast.Node, depth int, typesInfo *types.Info, pkgMap map[string]*packages.Package, visited map[string]bool) {
 	ast.Inspect(node, func(n ast.Node) bool {
-		if call, ok := n.(*ast.CallExpr); ok {
+		call, ok := n.(*ast.CallExpr)
+		if ok {
 			printIndentedCall(call, depth)
 
-			// 呼び出し先の関数を再帰的に解析
+			// 呼び出し先の関数定義を取得
 			if fn := getFunctionDefinition(call, typesInfo, pkgMap); fn != nil {
-				// 関数のフルパスを取得してループを防ぐ
 				fullName := fmt.Sprintf("%s.%s", fn.Pkg, fn.Name)
 				if !visited[fullName] {
 					visited[fullName] = true
@@ -71,44 +195,24 @@ func extractCallSequence(node ast.Node, depth int, typesInfo *types.Info, pkgMap
 	})
 }
 
-// 呼び出しをインデント付きで出力
-func printIndentedCall(call *ast.CallExpr, depth int) {
-	indent := strings.Repeat("  ", depth)
-	switch fun := call.Fun.(type) {
-	case *ast.SelectorExpr: // パッケージ名を含む呼び出し
-		fmt.Printf("%s%s.%s\n", indent, getIdentName(fun.X), fun.Sel.Name)
-	case *ast.Ident: // ローカル関数呼び出し
-		fmt.Printf("%s%s\n", indent, fun.Name)
-	default:
-		fmt.Printf("%sUnknown function call\n", indent)
-	}
-}
-
-// 呼び出し先関数の定義を取得
-type FunctionDefinition struct {
-	Pkg  string        // パッケージ名
-	Name string        // 関数名
-	Node *ast.FuncDecl // 関数ノード
-}
-
+// getFunctionDefinition は、呼び出し先関数が同パッケージ内に定義されている場合に探し出す
 func getFunctionDefinition(call *ast.CallExpr, typesInfo *types.Info, pkgMap map[string]*packages.Package) *FunctionDefinition {
-	// 型情報から関数オブジェクトを取得
 	obj := typesInfo.ObjectOf(getCallIdent(call))
 	if obj == nil || obj.Pkg() == nil {
-		// 無効な呼び出しまたは外部依存関係
 		return nil
 	}
-
-	// 呼び出し元のパッケージを特定
 	pkg := pkgMap[obj.Pkg().Path()]
 	if pkg == nil {
 		return nil
 	}
-
-	// パッケージ内の関数定義を探索
+	// パッケージ内の関数を探索
 	for _, file := range pkg.Syntax {
 		for _, decl := range file.Decls {
-			if fn, ok := decl.(*ast.FuncDecl); ok && fn.Name.Name == obj.Name() {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok {
+				continue
+			}
+			if fn.Name.Name == obj.Name() {
 				return &FunctionDefinition{
 					Pkg:  obj.Pkg().Name(),
 					Name: obj.Name(),
@@ -120,7 +224,20 @@ func getFunctionDefinition(call *ast.CallExpr, typesInfo *types.Info, pkgMap map
 	return nil
 }
 
-// 関数呼び出しの識別子を取得
+// printIndentedCall は呼び出しをインデント付きで表示するユーティリティ
+func printIndentedCall(call *ast.CallExpr, depth int) {
+	indent := strings.Repeat("  ", depth)
+	switch fun := call.Fun.(type) {
+	case *ast.SelectorExpr:
+		fmt.Printf("%s%s.%s\n", indent, getIdentName(fun.X), fun.Sel.Name)
+	case *ast.Ident:
+		fmt.Printf("%s%s\n", indent, fun.Name)
+	default:
+		fmt.Printf("%s(Unknown call)\n", indent)
+	}
+}
+
+// getCallIdent は、CallExpr の呼び出し先識別子 (関数名) を取得
 func getCallIdent(call *ast.CallExpr) *ast.Ident {
 	switch fun := call.Fun.(type) {
 	case *ast.Ident:
@@ -131,10 +248,21 @@ func getCallIdent(call *ast.CallExpr) *ast.Ident {
 	return nil
 }
 
-// セレクタのパッケージ名や変数名を取得
+// getIdentName は SelectorExpr のパッケージ名や変数名を取得
 func getIdentName(expr ast.Expr) string {
 	if ident, ok := expr.(*ast.Ident); ok {
 		return ident.Name
 	}
 	return "unknown"
+}
+
+// getIdent は、CallExpr の引数などが Ident / SelectorExpr の場合に対応して識別子を抜き出す
+func getIdent(expr ast.Expr) *ast.Ident {
+	switch e := expr.(type) {
+	case *ast.Ident:
+		return e
+	case *ast.SelectorExpr:
+		return e.Sel
+	}
+	return nil
 }
