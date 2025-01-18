@@ -2,6 +2,8 @@
 
 OpenAI Dev Day 2024 で発表された「Realtime API」を使って、**ブラウザだけ**でボイスチャットを実現するデモを作ってみました。本記事では、WebRTC を活用した理由や JavaScript 実装のポイントを解説します。
 
+(参考: [OpenAI Dev Day 2024 Keynote で Realtime API](https://www.youtube.com/watch?v=auXCQ9-721o&t=1140s) の紹介部分があります)
+
 ## 背景
 OpenAI の Realtime API は、GPT-4 系のモデルと **リアルタイムな音声・テキストのやり取り** が可能になる新しい API です。  
 これまではテキストベースの対話が中心でしたが、音声の送受信をブラウザで直接扱えるようになると、**スマートスピーカー的な体験**や **音声アシスタント** などを簡単に実装できるようになります。
@@ -82,7 +84,7 @@ OpenAI の Realtime API は、GPT-4 系のモデルと **リアルタイムな�
     このデモはローカル学習用です。<br>
     1. APIキー入力 → <strong>エフェメラルキー取得</strong><br>
     2. <strong>接続開始</strong> → マイク利用を許可<br>
-    3. テキストを入力して「送信」→ Realtime API が応答 (DataChannel 経由)<br>
+    3. 音声を入力して「送信」→ Realtime API が応答 (DataChannel 経由)<br>
     4. 必要に応じて「接続終了」で WebRTC をクローズ
   </p>
 
@@ -110,12 +112,6 @@ OpenAI の Realtime API は、GPT-4 系のモデルと **リアルタイムな�
   <h3>入力・出力トランスクリプト</h3>
   <div id="transcript"></div>
 
-  <!-- ユーザー入力フォーム -->
-  <p>
-    <input type="text" id="userInput" size="50" placeholder="メッセージを入力"/>
-    <button id="btnSend" disabled>送信</button>
-  </p>
-
   <script>
     // UI要素を取得
     const inputApiKey = document.getElementById("inputApiKey");
@@ -126,8 +122,6 @@ OpenAI の Realtime API は、GPT-4 系のモデルと **リアルタイムな�
     const remoteAudio = document.getElementById("remoteAudio");
     const logEl = document.getElementById("log");
     const transcriptEl = document.getElementById("transcript");
-    const userInputEl = document.getElementById("userInput");
-    const btnSend = document.getElementById("btnSend");
 
     // 内部状態
     let ephemeralKey = null;           // 取得したエフェメラルキー
@@ -252,14 +246,11 @@ OpenAI の Realtime API は、GPT-4 系のモデルと **リアルタイムな�
           const data = JSON.parse(e.data);
           log("DataChannel 受信 (JSON):", data);
 
-          // ここでは "response" 系のイベントが来たら「アシスタントメッセージ」として表示してみる
+          // "response" 系のイベントが来たら「アシスタントメッセージ」として表示
           if (data.type && data.type.startsWith("response")) {
-            // 例: text をまとめて受け取るパターン (サマリーメッセージ等)
-            //     もしくは、部分的なトランスクリプトなど…
             if (data.output && data.output.text) {
               addTranscript(data.output.text, "assistant");
             } else {
-              // そのほか適宜処理
               addTranscript(JSON.stringify(data), "assistant");
             }
           } else {
@@ -302,7 +293,6 @@ OpenAI の Realtime API は、GPT-4 系のモデルと **リアルタイムな�
 
         // ボタンの状態を更新
         btnEndConnection.disabled = false;
-        btnSend.disabled = false;
       } catch (err) {
         logError("SDP通信エラー:", err);
       }
@@ -328,37 +318,10 @@ OpenAI の Realtime API は、GPT-4 系のモデルと **リアルタイムな�
       }
       connectionActive = false;
       btnEndConnection.disabled = true;
-      btnSend.disabled = true;
       logInfo("WebRTC 接続を終了しました。");
     }
 
-    // 送信ボタン (テキスト送信)
-    btnSend.addEventListener("click", () => {
-      if (!connectionActive || !dc || dc.readyState !== "open") {
-        logError("DataChannel が開いていません。接続を開始してください。");
-        return;
-      }
-      const text = userInputEl.value.trim();
-      if (!text) return;
-
-      // ユーザーメッセージとしてトランスクリプトに追加
-      addTranscript(text, "user");
-      userInputEl.value = "";
-
-      // Realtime API へのイベント送信例 (response.create)
-      // ここではテキストモードで「instructions」に入れていますが、
-      // 実際には API 仕様に応じて調整してください。
-      const eventMsg = {
-        type: "response.create",
-        response: {
-          modalities: ["text"],
-          instructions: text
-        },
-      };
-
-      dc.send(JSON.stringify(eventMsg));
-      log("DataChannel 送信:", eventMsg);
-    });
+ 
   </script>
 </body>
 </html>
@@ -378,11 +341,59 @@ OpenAI の Realtime API は、GPT-4 系のモデルと **リアルタイムな�
 
 ---
 
-## まとめと注意点
+### シーケンス図
 
-- **WebRTC** を使うことで、ブラウザのみで音声ストリームがやり取りできるのが大きな利点です。  
-- 同じ Realtime API を **WebSocket** で扱う場合、サーバーを立てる必要があったりしますが、その場合は WebRTC の手順を省略できる代わりにストリーム伝送の実装が少し複雑化するかもしれません。  
-- このデモのように **「通常の API キーをブラウザに直接入力する」** のは、**本番ではセキュリティ的に非常に危険**です。必ずサーバー側でキーを保持し、**エフェメラルキーだけ**をクライアントに渡す構成をとってください。
+![](https://storage.googleapis.com/zenn-user-upload/dd61bd7adc93-20250118.png)
 
-OpenAI Realtime API は **リアルタイム音声認識・応答**、**関数呼び出し**、**逐次テキスト生成**など、非常に面白い可能性を秘めています。  
-ぜひ、今回の簡易デモをベースに、自分だけの **高度なボイスチャット** や **音声アプリ** を作ってみてください！
+### シーケンス図の解説
+
+1. **エフェメラルキーの取得**
+   - **ユーザー**がブラウザに通常のAPIキーを入力します。
+   - **ブラウザ**がOpenAI Realtime APIに対してセッション生成リクエスト（`POST /v1/realtime/sessions`）を送信します。
+   - **API**がエフェメラルキーを返却します。
+
+2. **WebRTC接続開始**
+   - **ブラウザ**が`RTCPeerConnection`を生成します。
+   - マイクから音声ストリームを取得し、`RTCPeerConnection`に音声トラックを追加します。
+   - データチャネル（"oai-events"）を作成します。
+   - SDPオファーを作成し、ローカルディスクリプションとして設定します。
+   - SDPオファーをRealtime APIに送信し、アンサー（SDP）を受け取ります。
+   - アンサーを`RTCPeerConnection`に設定し、WebRTC接続が確立されます。
+
+3. **音声ストリームの送受信**
+   - **ブラウザ**から**RTCPeerConnection**へ音声ストリームが送信されます。
+   - **API**から**RTCPeerConnection**へ音声ストリームが送信され、**ブラウザ**で`ontrack`イベントを通じて音声が再生されます。
+
+4. **データチャネルでのメッセージ送受信**
+   - **ブラウザ**がデータチャネルを通じてメッセージ（例：`{ type: "response.create", ... }`）を送信します。
+   - **API**がデータチャネルを通じて応答メッセージ（例：`{ type: "response", "output": {...} }`）を返却します。
+   - **ブラウザ**が受信したメッセージを解析し、トランスクリプトに追加します（`[assistant] メッセージ`）。
+
+5. **WebRTC接続終了**
+   - **ユーザー**が「接続終了」ボタンをクリックします。
+   - **ブラウザ**がデータチャネルと`RTCPeerConnection`を閉じ、マイクストリームを停止します。
+   - 接続状態が更新され、UIが適切に反映されます。
+
+### 注意点
+
+- **セキュリティ**
+  - 本デモでは、通常のAPIキーをブラウザに直接入力していますが、これは**非常に危険**です。本番環境では、サーバーサイドでAPIキーを安全に管理し、クライアントにはエフェメラルキーのみを渡す構成にしてください。
+
+- **エフェメラルキーの有効期限**
+  - エフェメラルキーは短期間（例：1分間）しか有効ではありません。接続が切断された場合やキーが期限切れになった場合は、再度キーを取得する必要があります。
+
+- **マイクのアクセス許可**
+  - ブラウザでマイクへのアクセスが許可されていることを確認してください。また、HTTPS環境でホストする必要があります（ローカルホストは例外）。
+
+
+## まとめ
+
+### まとめ
+
+OpenAI Dev Day 2024で発表された「Realtime API」を活用することで、**ブラウザだけ**でGPT-4系のモデルと**リアルタイム音声**を用いた対話が可能になりました。**WebRTC**を利用することで、音声ストリームとデータチャネルをブラウザ内で直接扱うことができ、サーバーレスな構成で手軽にボイスチャット機能を実装できます。
+
+今回のデモでは、エフェメラルキーを用いて安全にRealtime APIと接続し、音声の送受信およびメッセージのやりとりを実現しました。**通常のAPIキーをブラウザに直接入力するのは非常に危険**ですが、エフェメラルキーを介することでセキュリティを確保しつつ、手軽に試すことができます。
+
+さらに、今回触れなかったですが、Dev Dayのビデオでは**関数呼び出し**を活用して、お菓子屋さんに音声で電話をかけ注文するデモが紹介されていました。これを実現することで、よりインタラクティブで高度な音声アプリケーションの開発が可能となり、**音声を通じた具体的なタスクの実行**など、さらなる可能性が広がります。
+
+今後は、関数呼び出しを組み込んだボイスチャットや、音声インターフェースを活用した多様なアプリケーションの開発に挑戦してみると、より魅力的なユーザー体験を提供できそうでワクワクしますね！
