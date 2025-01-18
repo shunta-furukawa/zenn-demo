@@ -30,7 +30,7 @@
     このデモはローカル学習用です。<br>
     1. APIキー入力 → <strong>エフェメラルキー取得</strong><br>
     2. <strong>接続開始</strong> → マイク利用を許可<br>
-    3. テキストを入力して「送信」→ Realtime API が応答 (DataChannel 経由)<br>
+    3. 音声を入力して「送信」→ Realtime API が応答 (DataChannel 経由)<br>
     4. 必要に応じて「接続終了」で WebRTC をクローズ
   </p>
 
@@ -58,12 +58,6 @@
   <h3>入力・出力トランスクリプト</h3>
   <div id="transcript"></div>
 
-  <!-- ユーザー入力フォーム -->
-  <p>
-    <input type="text" id="userInput" size="50" placeholder="メッセージを入力"/>
-    <button id="btnSend" disabled>送信</button>
-  </p>
-
   <script>
     // UI要素を取得
     const inputApiKey = document.getElementById("inputApiKey");
@@ -74,8 +68,6 @@
     const remoteAudio = document.getElementById("remoteAudio");
     const logEl = document.getElementById("log");
     const transcriptEl = document.getElementById("transcript");
-    const userInputEl = document.getElementById("userInput");
-    const btnSend = document.getElementById("btnSend");
 
     // 内部状態
     let ephemeralKey = null;           // 取得したエフェメラルキー
@@ -200,14 +192,11 @@
           const data = JSON.parse(e.data);
           log("DataChannel 受信 (JSON):", data);
 
-          // ここでは "response" 系のイベントが来たら「アシスタントメッセージ」として表示してみる
+          // "response" 系のイベントが来たら「アシスタントメッセージ」として表示
           if (data.type && data.type.startsWith("response")) {
-            // 例: text をまとめて受け取るパターン (サマリーメッセージ等)
-            //     もしくは、部分的なトランスクリプトなど…
             if (data.output && data.output.text) {
               addTranscript(data.output.text, "assistant");
             } else {
-              // そのほか適宜処理
               addTranscript(JSON.stringify(data), "assistant");
             }
           } else {
@@ -250,7 +239,6 @@
 
         // ボタンの状態を更新
         btnEndConnection.disabled = false;
-        btnSend.disabled = false;
       } catch (err) {
         logError("SDP通信エラー:", err);
       }
@@ -276,37 +264,10 @@
       }
       connectionActive = false;
       btnEndConnection.disabled = true;
-      btnSend.disabled = true;
       logInfo("WebRTC 接続を終了しました。");
     }
 
-    // 送信ボタン (テキスト送信)
-    btnSend.addEventListener("click", () => {
-      if (!connectionActive || !dc || dc.readyState !== "open") {
-        logError("DataChannel が開いていません。接続を開始してください。");
-        return;
-      }
-      const text = userInputEl.value.trim();
-      if (!text) return;
-
-      // ユーザーメッセージとしてトランスクリプトに追加
-      addTranscript(text, "user");
-      userInputEl.value = "";
-
-      // Realtime API へのイベント送信例 (response.create)
-      // ここではテキストモードで「instructions」に入れていますが、
-      // 実際には API 仕様に応じて調整してください。
-      const eventMsg = {
-        type: "response.create",
-        response: {
-          modalities: ["text"],
-          instructions: text
-        },
-      };
-
-      dc.send(JSON.stringify(eventMsg));
-      log("DataChannel 送信:", eventMsg);
-    });
+ 
   </script>
 </body>
 </html>
